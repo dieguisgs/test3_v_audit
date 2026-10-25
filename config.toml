@@ -1,0 +1,127 @@
+# ============================================================================
+#  VWAPS_auditable - curve filling configuration, NEIGHBOUR methodology
+#  (see ALGORITMO.md / ALGORITHM.md). Same structure as VWAPS; the method has
+#  parameters tau_log, shrink_k, history_days (+ [fallback]). No ratio/auto, stateful history,
+#  correlation, cross-product help, smoothing or shape.
+#  Relative paths are resolved from THIS file's directory.
+# ============================================================================
+
+[paths]
+# Own VWAP input (xlsx or csv; glob patterns such as data/vwaps_*.xlsx work).
+# Override per command with --vwap. Point this at the original input on your machine.
+vwap_input     = "data/vwaps.xlsx"
+# (product, region, unit) in your input -> EEX file. Create/review with `python run.py mapping`.
+# Only products marked use = fill receive a completed curve (Excel/CSV, on/off per row).
+mapping        = "mappings/products.csv"
+# EEX curve root (eex_file entries in the mapping are relative to this path).
+eex_curves_dir = "../eex_scraper/output/curves/POWER"
+output_dir     = "output"
+
+
+[layers]
+arbitrage   = false    # Opt in to reconstruct unresolved targets from own/already estimated contracts
+
+
+[method]
+# price = EEX + trust x weighted mean of (VWAP - EEX) of the day's own VWAPs,
+#   weight of each VWAP = exp(-distance / tau_log)    distance in log days to delivery
+#   trust               = sum(weights) / (sum(weights) + shrink_k)
+tau_log        = 0.7    # Reach along the curve (>= 0.05): larger -> distant VWAPs count more
+shrink_k       = 1.0    # Evidence needed: larger -> stays closer to EEX with few/far VWAPs
+volume_weight  = 0.5    # Anchor weight x (volume / day's median volume) ** this: 4x volume -> 2x weight. 0 = off
+# Optional history: the trust today's VWAPs do not cover (shrink_k) goes to what your VWAPs said
+# about the SAME contract in the last N business days (recomputed from the input; no stored state).
+#   price = EEX + (W*local_today + shrink_k*hist) / (W + shrink_k)
+history_days   = 10     # 0 = off. 10 = last 10 sessions (best in tests; costs <1% if deviations do not persist)
+min_volume     = 0      # Minimum volume for a VWAP to move other contracts (unknown volume fails a minimum > 0); originals always kept
+max_anchor_dev = 0      # If >0, a VWAP further than this fraction from EEX does not move others
+
+
+[fallback]
+# Last resort so that no gap stays empty (ALGORITMO.md section 6c):
+#  - EEX does not quote the contract -> proxy from EEX: parent contract (week/month/quarter/year)
+#    + EWMA of the shape of quoted siblings (spread for short contracts, ratio for quarters/seasons;
+#    months use a neighbouring market's shape). Marked source = eex_proxy, low confidence.
+#  - The market has no EEX publication that day -> neighbouring market's curve as shape, own VWAPs
+#    give the level. Marked source = eex_donor.
+enabled  = true
+# Without any own information (no VWAPs today nor in history) the official EEX price is never
+# published as is: short EWMA of the reference (2 publications, half-life 0.5 = 80% today, 20% previous).
+no_info_window   = 2
+no_info_halflife = 0.5
+window   = 20                 # EEX publications in the sibling-shape EWMA
+halflife = 8.0                # EWMA half-life, in publications
+donors   = ["DE", "FR", "AT"] # neighbouring markets (same product file), in order of preference
+
+
+[eex]
+# Latest publication allowed: reference date + offset_days (calendar days).
+# 0: today's publication if present, otherwise the latest earlier one.
+# -1: exclude today; -2: exclude today and yesterday. Positive values are invalid.
+# Nothing after the cutoff is used.
+offset_days = 0
+# max_stale_days: maximum age relative to the reference date (0 = unlimited).
+# warn_stale_days: log an ERROR once the publication is this many days old.
+max_stale_days  = 0
+warn_stale_days = 3
+
+
+[timezones]
+# Used to draft the mapping (`python run.py mapping`). The mapping's timezone
+# column takes precedence after that.
+default = "Europe/Berlin"
+GB      = "Europe/London"
+IE      = "Europe/Dublin"
+PT      = "Europe/Lisbon"
+GR      = "Europe/Athens"
+RO      = "Europe/Bucharest"
+BG      = "Europe/Sofia"
+FI      = "Europe/Helsinki"
+
+
+[targets]
+# Only tenors that this market's EEX offers are produced: a tenor is offered if EEX priced it
+# (directly or built by hours) in any of its last `offered_lookback` publications. A tenor
+# offered recently but missing from today's publication is filled ([fallback] proxy); a tenor
+# EEX never offers here (e.g. M+8 in a small market) is not part of the curve.
+only_eex_offered = true
+offered_lookback = 20
+# Target tenors defining each day's completed curve (upper bound; per product with `tenors`).
+tenors = [
+    "D+1", "D+2", "D+3",
+    "WE", "WE+1", "WE+2", "WE+3",
+    "BOW", "W+1", "W+2", "W+3", "W+4",
+    "BOM", "M+1", "M+2", "M+3", "M+4", "M+5", "M+6", "M+7", "M+8", "M+9", "M+10",
+    "Q+1", "Q+2", "Q+3", "Q+4", "Q+5", "Q+6", "Q+7", "Q+8",
+    "Sum+1", "Sum+2", "Sum+3", "Win+1", "Win+2", "Win+3",
+    "Cal+1", "Cal+2", "Cal+3",
+]
+
+
+[conventions]
+# Interpret relative labels in own VWAPs. Check these conventions against
+# real data with `python run.py detect-conventions`.
+day            = "calendar"   # D+n: calendar days or business days (Monday-Friday)
+weekend_offset = 0            # Own WE+n means weekend n+offset (WE+0 = the next one)
+
+
+[run]
+# global: ignore optional model-parameter columns in the product mapping.
+# individual: apply each row's model settings; blank cells inherit this TOML.
+# Add all supported columns with: python run.py mapping --with-parameters
+# Mapping files can be CSV or XLSX (first sheet), with one row per full identity.
+configuration_mode = "global"
+# The neighbour method learns nothing from earlier days, so warmup does not
+# change any price; it is kept for command compatibility with VWAPS.
+warmup_days = 0
+
+
+[vwap_columns]
+# Column names in the own VWAP input file.
+reference_date = "reference_date"
+product        = "product"
+region         = "region"
+unit           = "unit"
+tenor          = "tenor2"
+vwap           = "vwap"
+volume         = "total_volume"

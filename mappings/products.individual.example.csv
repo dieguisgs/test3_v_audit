@@ -1,0 +1,4 @@
+product,region,unit,use,area,profile,eex_file,hours,timezone,comment,tenors,layer_arbitrage,min_volume,max_anchor_dev,tau_log,shrink_k,history_days
+EXAMPLE_POWER,Example_North,EUR/MWh,off,EXAMPLE,Base,,Base,Europe/Berlin,Fictional identity. Set real EEX path and review before enabling.,,,,,0.3,2.0,5
+EXAMPLE_POWER,Example_South,EUR/MWh,off,EXAMPLE,Base,,Base,Europe/Berlin,Fictional identity. Set real EEX path and review before enabling.,,,,,,,0
+EXAMPLE_POWER,Example_West,EUR/MWh,off,EXAMPLE,Base,,Base,Europe/Berlin,Fictional identity. Set real EEX path and review before enabling.,,,,,,,
