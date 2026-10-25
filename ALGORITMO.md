@@ -316,13 +316,18 @@ padre  = precio EEX (ponderado por horas) del contrato más pequeño que contien
          semana para días, fines de semana y BOW · mes para semanas y BOM
          quarter para meses · año para quarters y seasons
 
-contratos cortos (día, fin de semana, semana, BOW, BOM):
+contratos cortos (día, semana, BOW, BOM):
     proxy = padre + EWMA( hermano − su padre )        spread en €
+fines de semana:
+    proxy = media de [ semana + EWMA( fin de semana hermano − su semana ) ]
+                  y  [ semana × ( fin de semana / semana en el mercado vecino ) ]
 contratos largos (quarter, season):
     proxy = padre × EWMA( hermano / su padre )        ratio (el padre es un año, nunca cerca de 0)
 meses:
-    proxy = quarter × ( mes / quarter en un mercado vecino que sí lo cotiza )
+    proxy = quarter × ( mes / quarter en el mercado vecino que sí lo cotiza )
     o el quarter tal cual si no hay vecino
+
+mercado vecino: el que mejor reproduce la forma de cada mercado, medido (tabla abajo)
 ```
 
 - **Hermanos:** contratos del mismo tipo y en la misma posición estacional que sí cotizan (otros fines
@@ -343,8 +348,25 @@ reconstruyéndolos (`research/fallback_test2.py`). Error medio en €/MWh:
 |---|---|---|---|
 | Season | 16.8 | 4.6 | **3.4** (ratio, 20 publicaciones) |
 | Quarter | 20.7 | 7.9 | **5.6** (ratio, 20) |
-| Mes | 9.8 | 12.7 | **6.1** (forma del vecino) |
-| Fin de semana | 32.2 | 17.3 | **14.8** (spread, 20) |
+| Mes | 9.8 | 12.7 | **3.5** (forma del vecino elegido por mercado; 6.1 con un vecino fijo) |
+| Fin de semana | 32.2 | 17.3 | **12.2** (media de hermanos y vecino; 14.8 solo hermanos) |
+
+**Vecino por mercado** (`[fallback.donors_by_area]`, `research/donor_choice.py`). Error del mes
+reconstruido con la forma de cada vecino:
+
+| Mercado | Vecino elegido | Error | Con el peor vecino | Solo quarter |
+|---|---|---|---|---|
+| AT | CH | 1.8 | 15.7 (ES) | 11.6 |
+| BE | DE | 2.5 | 15.1 (ES) | 7.6 |
+| CH | AT | 1.8 | 16.2 (ES) | 10.8 |
+| DE | NL | 1.7 | 13.6 (ES) | 9.3 |
+| ES | FR | 9.5 | 12.6 (IT) | 15.6 |
+| FR | NL | 4.8 | 10.6 (ES) | 13.3 |
+| IT | BE | 4.0 | 19.3 (ES) | 5.1 |
+| NL | DE | 1.7 | 12.9 (ES) | 10.5 |
+
+ES es un mercado aparte (ningún vecino reproduce bien su forma); el resto tiene un vecino muy parecido.
+Para mercados que no están en la tabla se usa `donors`.
 
 Son errores mayores que los del método normal (0.5–2.5 €/MWh). Por eso estos precios llevan
 **confianza baja** (0.2 + 0.3·trust) y van marcados. Son mucho mejores que dejar el hueco vacío o
@@ -532,7 +554,7 @@ Además:
 | 4 | `[method] min_volume` | 0 | Volumen mínimo para que un VWAP mueva a otros; con mínimo > 0, un volumen desconocido no lo cumple |
 | 5 | `[method] max_anchor_dev` | 0 | Si > 0, un VWAP muy alejado de EEX no mueve a otros |
 | 6 | `[targets] only_eex_offered` / `offered_lookback` | true / 20 | Generar solo tenors que EEX ofrece en ese mercado |
-| 7 | `[fallback] enabled`, `window`, `halflife`, `donors` | true, 20, 8, DE/FR/AT | Proxy para contratos que faltan hoy en EEX |
+| 7 | `[fallback] enabled`, `window`, `halflife`, `donors`, `donors_by_area` | true, 20, 8, DE/FR/AT, tabla medida | Proxy para contratos que faltan hoy en EEX |
 | 8 | `[fallback] no_info_window` / `no_info_halflife` | 2 / 0.5 | EWMA corta cuando no hay información propia |
 | — | `[eex] offset_days` | 0 | Publicación del día (0) o hasta ayer (−1). Es operativo, no del método |
 

@@ -10,6 +10,18 @@ from pathlib import Path
 
 from vwaps.tenors import parse_tenor
 
+# Best neighbouring market for each market (month-shape error, research/donor_choice.py).
+DEFAULT_DONORS = {
+    "AT": ("CH", "NL", "DE"),
+    "BE": ("DE", "NL"),
+    "CH": ("AT", "DE"),
+    "DE": ("NL", "AT"),
+    "ES": ("FR", "NL"),
+    "FR": ("NL", "DE"),
+    "IT": ("BE", "DE"),
+    "NL": ("DE", "AT"),
+}
+
 
 @dataclass
 class Config:
@@ -49,6 +61,8 @@ class Config:
     fallback_window: int = 20  # EEX publications in the sibling-shape EWMA
     fallback_halflife: float = 8.0  # EWMA half-life, in publications
     fallback_donors: tuple = ("DE", "FR", "AT")  # neighbouring markets, in order of preference
+    # Best neighbour for each market, measured on month shapes (research/donor_choice.py)
+    fallback_donors_by_area: dict = field(default_factory=lambda: {k: tuple(v) for k, v in DEFAULT_DONORS.items()})
     eex_offset_days: int = 0
     configuration_mode: str = "global"
     command_overrides: dict = field(default_factory=dict)
@@ -88,6 +102,12 @@ def validate_method_config(cfg: Config) -> None:
     half = cfg.fallback_halflife
     if isinstance(half, bool) or not isinstance(half, (int, float)) or not math.isfinite(half) or half <= 0:
         raise ValueError("fallback.halflife must be a finite positive number")
+    by_area = cfg.fallback_donors_by_area
+    if not isinstance(by_area, dict) or any(
+        not isinstance(k, str) or not isinstance(v, (list, tuple)) or any(not isinstance(a, str) or not a for a in v)
+        for k, v in by_area.items()
+    ):
+        raise ValueError("fallback.donors_by_area must map area codes to lists of area codes")
     if not isinstance(cfg.fallback_donors, (list, tuple)) or any(not isinstance(a, str) or not a for a in cfg.fallback_donors):
         raise ValueError('fallback.donors must be a list of area codes such as ["DE", "FR"]')
     days = cfg.history_days
@@ -195,6 +215,7 @@ def load_config(path: str | Path) -> Config:
         fallback_window=raw.get("fallback", {}).get("window", 20),
         fallback_halflife=raw.get("fallback", {}).get("halflife", 8.0),
         fallback_donors=tuple(raw.get("fallback", {}).get("donors", ("DE", "FR", "AT"))),
+        fallback_donors_by_area={k: tuple(v) for k, v in raw.get("fallback", {}).get("donors_by_area", DEFAULT_DONORS).items()},
     )
     cfg.mapping_file = cfg.resolve(paths.get("mapping", "mappings/products.csv"))
     cfg.eex_curves_dir = cfg.resolve(paths.get("eex_curves_dir", "../eex_scraper/output/curves/POWER"))

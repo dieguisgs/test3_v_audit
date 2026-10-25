@@ -53,6 +53,18 @@ window   = 20                 # EEX publications in the sibling-shape EWMA
 halflife = 8.0                # EWMA half-life, in publications
 donors   = ["DE", "FR", "AT"] # neighbouring markets (same product file), in order of preference
 
+[fallback.donors_by_area]
+# Neighbour that best reproduces each market's month shape (research/donor_choice.py, 8 markets).
+# Markets not listed use `donors` above. Weekends also blend the neighbour's weekend/week shape.
+AT = ["CH", "NL", "DE"]
+BE = ["DE", "NL"]
+CH = ["AT", "DE"]
+DE = ["NL", "AT"]
+ES = ["FR", "NL"]
+FR = ["NL", "DE"]
+IT = ["BE", "DE"]
+NL = ["DE", "AT"]
+
 
 [eex]
 # Latest publication allowed: reference date + offset_days (calendar days).

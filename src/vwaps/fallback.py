@@ -98,6 +98,11 @@ class Proxy:
             return f"{parent} x EWMA sibling ratio {d['shape']:.4f}"
         if self.rule == "parent_plus_spread":
             return f"{parent} {d['shape']:+.2f} EWMA sibling spread"
+        if self.rule == "mean_siblings_and_donor":
+            return (
+                f"mean of {parent} {d['shape']:+.2f} EWMA sibling spread = {d['siblings_price']:.2f} and "
+                f"{parent} x {d['donor']} weekend shape {d['donor_shape']:.4f} = {d['donor_price']:.2f}"
+            )
         if self.rule == "parent_x_donor_shape":
             return f"{parent} x {d['donor']} month shape {d['shape']:.4f}"
         return f"{parent} (no shape available)"
@@ -106,13 +111,12 @@ class Proxy:
 class EexFallback:
     """Rebuild unquoted contracts from one curve's EEX book (and an optional donor)."""
 
-    def __init__(self, book: EexBook, hours, window: int, halflife: float, donor: EexBook | None = None, donor_name: str = ""):
+    def __init__(self, book: EexBook, hours, window: int, halflife: float, donors: list[tuple[str, EexBook]] | None = None):
         self.book = book
         self.hours = hours
         self.window = window
         self.halflife = halflife
-        self.donor = donor
-        self.donor_name = donor_name
+        self.donors = list(donors or [])  # (name, book) in order of preference
         self._dates = tuple(book.trade_dates)
         self._pricers: dict[tuple[int, date], Pricer] = {}
 
@@ -156,7 +160,22 @@ class EexFallback:
                 break
         return sum(values) / len(values) if values else None
 
-    def estimate(self, period: Period, asof: date | None, donor_asof: date | None = None) -> Proxy | None:
+    def _donor_shape(self, kind: str, s: date, e: date, pk: str, asof: date) -> tuple[float, str, date] | None:
+        """Contract / its parent in the first neighbouring market that quotes both, on that
+        market's latest publication up to `asof`."""
+        for name, donor in self.donors:
+            pub = donor.available_asof(asof, None, 0)
+            if pub is None:
+                continue
+            dp = self._pricer(donor, pub)
+            q = dp.price(s, e, kind=kind)
+            dparent = self._parent(dp, kind, s, e, pk)
+            if q is not None and math.isfinite(q[0]) and dparent and dparent > 0:
+                return q[0] / dparent, name, pub
+        return None
+
+    def estimate(self, period: Period, asof: date | None) -> Proxy | None:
+        """Proxy from this book's publication `asof`; neighbours use their latest publication up to it."""
         if asof is None or period.kind not in PARENTS:
             return None
         s, e, kind = period.start, period.end, period.kind
@@ -168,23 +187,14 @@ class EexFallback:
         else:
             return None
         if kind == "Month":
-            if self.donor is not None and donor_asof is not None:
-                dp = self._pricer(self.donor, donor_asof)
-                q = dp.price(s, e, kind="Month")
-                dparent = self._parent(dp, kind, s, e, pk)
-                if q is not None and dparent and dparent > 0 and math.isfinite(q[0]):
-                    shape = q[0] / dparent
-                    return Proxy(
-                        parent * shape,
-                        "parent_x_donor_shape",
-                        {
-                            "parent_kind": pk,
-                            "parent": parent,
-                            "shape": shape,
-                            "donor": self.donor_name,
-                            "donor_publication": donor_asof.isoformat(),
-                        },
-                    )
+            found = self._donor_shape(kind, s, e, pk, asof)
+            if found is not None:
+                shape, donor, pub = found
+                return Proxy(
+                    parent * shape,
+                    "parent_x_donor_shape",
+                    {"parent_kind": pk, "parent": parent, "shape": shape, "donor": donor, "donor_publication": pub.isoformat()},
+                )
             return Proxy(parent, "parent", {"parent_kind": pk, "parent": parent})
         end = bisect_right(self._dates, asof)
         publications = self._dates[max(0, end - self.window) : end]
@@ -202,6 +212,14 @@ class EexFallback:
             return Proxy(
                 parent * shape, "parent_x_ratio", {"parent_kind": pk, "parent": parent, "shape": shape, "observations": len(observations)}
             )
-        return Proxy(
-            parent + shape, "parent_plus_spread", {"parent_kind": pk, "parent": parent, "shape": shape, "observations": len(observations)}
-        )
+        detail = {"parent_kind": pk, "parent": parent, "shape": shape, "observations": len(observations)}
+        if kind == "Weekend":
+            # Weekends: mean of the sibling reconstruction and the neighbour's weekend/week shape
+            # (measured 17 % more accurate than siblings alone, research/fallback_test3.py).
+            found = self._donor_shape(kind, s, e, pk, asof)
+            if found is not None:
+                donor_shape, donor, _ = found
+                siblings, neighbour = parent + shape, parent * donor_shape
+                detail.update(donor=donor, donor_shape=donor_shape, siblings_price=siblings, donor_price=neighbour)
+                return Proxy((siblings + neighbour) / 2, "mean_siblings_and_donor", detail)
+        return Proxy(parent + shape, "parent_plus_spread", detail)

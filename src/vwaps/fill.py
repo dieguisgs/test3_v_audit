@@ -179,8 +179,7 @@ class CurveFiller:
                     (name, donor, EexFallback(donor, hfn, cfg.fallback_window, cfg.fallback_halflife))
                     for name, donor in self._donor_books(cfg, m)
                 ]
-                first = donors[0] if donors else (None, None, None)
-                fallback = EexFallback(book, hfn, cfg.fallback_window, cfg.fallback_halflife, first[1], first[0] or "")
+                fallback = EexFallback(book, hfn, cfg.fallback_window, cfg.fallback_halflife, [(n, b) for n, b, _ in donors])
             own = {d: x for d, x in g.groupby("date")} if g is not None else {}
             out.append(Series(m, book, own, hfn, fallback, donors[0][1] if donors else None, donors))
         return out
@@ -191,7 +190,7 @@ class CurveFiller:
         out = []
         if not m.eex_file:
             return out
-        for area in cfg.fallback_donors:
+        for area in cfg.fallback_donors_by_area.get(m.area, cfg.fallback_donors):
             if area == m.area:
                 continue
             path = Path(cfg.eex_curves_dir) / area / Path(m.eex_file).name
@@ -430,8 +429,7 @@ class CurveFiller:
             q = pricers[key].price(per.start, per.end, kind=per.kind)
             value = q[0] if q is not None else None
             if value is None and fallback is not None:
-                donor_pub = s.donor.available_asof(pub, None, 0) if s.donor is not None and not p.reference else None
-                proxy = fallback.estimate(per, pub, donor_pub)
+                proxy = fallback.estimate(per, pub)
                 value = proxy.price if proxy is not None else None
             if value is not None and math.isfinite(value):
                 values.append(value)
@@ -586,12 +584,7 @@ class CurveFiller:
             proxy = None
             fallback = next((fb for name, _, fb in s.donors if name == p.reference), None) if p.reference else s.fallback
             if r is None and q is None and delivery_hours > 0 and fallback is not None:
-                donor_asof = (
-                    s.donor.available_asof(day, cfg.max_stale_days, cfg.eex_offset_days)
-                    if s.donor is not None and not p.reference
-                    else None
-                )
-                proxy = fallback.estimate(per, p.asof, donor_asof)
+                proxy = fallback.estimate(per, p.asof)
             row = {
                 **self.configuration_records[s.key],
                 "reference_date": day,

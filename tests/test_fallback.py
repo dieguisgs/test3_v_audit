@@ -14,6 +14,7 @@ from vwaps.io_eex import REQUIRED, EexBook
 from vwaps.mapping import ProductMap
 
 DAY = date(2026, 9, 30)  # Wednesday
+NL = chr(10)
 YESTERDAY = date(2026, 9, 29)
 
 
@@ -174,3 +175,33 @@ def test_without_own_information_the_official_price_is_never_published_as_is(tmp
     assert m1["adjustment"] == pytest.approx(m1["price"] - m1["eex_settle"])
     assert m1["adjustment"] == pytest.approx(expected - 100.0)
     assert "EWMA of EEX over 2 publication(s)" in m1["explanation"]
+
+
+def test_unquoted_weekend_averages_siblings_and_neighbour_shape(tmp_path):
+    cfg = configured(tmp_path, ["WE+2"])
+    donor = tmp_path / "curves" / "DE"
+    donor.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            dict(tradeDate=str(DAY), maturityType="Week", deliveryStart="2026-10-12", settlPx=100.0),
+            dict(tradeDate=str(DAY), maturityType="Weekend", deliveryStart="2026-10-17", settlPx=70.0),
+        ]
+    ).to_csv(donor / "fixture.csv", index=False)
+    rows = [(DAY, "Week", date(2026, 10, 5), 100.0), (DAY, "Week", date(2026, 10, 12), 110.0)]
+    rows.append((DAY, "Weekend", date(2026, 10, 10), 80.0))  # sibling spread -20
+    we2 = run(cfg, book(rows)).loc["WE+2"]
+    siblings, neighbour = 110.0 - 20.0, 110.0 * 0.7
+    assert we2["eex_proxy_rule"] == "mean_siblings_and_donor"
+    assert we2["price"] == pytest.approx((siblings + neighbour) / 2)
+    assert "DE/fixture.csv weekend shape" in we2["explanation"]
+
+
+def test_each_market_uses_its_measured_neighbour(tmp_path):
+    cfg = configured(tmp_path, ["M+1"])
+    assert cfg.fallback_donors_by_area["DE"][0] == "NL"
+    assert cfg.fallback_donors_by_area["ES"][0] == "FR"
+    extra = "[fallback]" + NL + "no_info_window = 1" + NL + "[fallback.donors_by_area]" + NL + 'DE = ["AT"]' + NL
+    custom = configured(tmp_path, ["M+1"], extra)
+    assert custom.fallback_donors_by_area == {"DE": ("AT",)}
+    with pytest.raises(ValueError):
+        validate_config(replace(cfg, fallback_donors_by_area={"DE": "AT"}))
