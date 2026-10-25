@@ -40,7 +40,9 @@ from vwaps.publication import CsvBatch, publication_lock
 from vwaps.synthetic import make_synthetic
 from vwaps.tenors import parse_tenor, resolve_tenor
 
-SOURCES = ["own", "eex_adjusted", "eex_history", "eex_proxy", "eex_donor", "eex_smoothed", "eex", "arbitrage", "missing"]
+SOURCES = [
+    "own", "months_aggregate", "eex_adjusted", "eex_history", "eex_proxy", "eex_donor", "eex_smoothed", "eex", "arbitrage", "missing",
+]
 KEYS = ["reference_date", *IDENTITY_COLUMNS]
 ENRICHED_KEYS = [f"curve_{name}" for name in KEYS]
 
@@ -356,7 +358,7 @@ def _layers(cfg: Config) -> str:
     return (
         f"Configuration: {cfg.configuration_mode}; global defaults: "
         f"neighbours tau_log={cfg.tau_log:g} shrink_k={cfg.shrink_k:g} volume_weight={cfg.volume_weight:g} history_days={cfg.history_days} "
-        f"| arbitrage={cfg.layer_arbitrage} "
+        f"| coherence={cfg.layer_coherence} arbitrage={cfg.layer_arbitrage} "
         f"| eex_offset_days={cfg.eex_offset_days}"
     )
 
@@ -443,7 +445,8 @@ def cmd_refill(cfg: Config, a) -> int:
     _out(_layers(cfg))
     if first_eex and start < first_eex:
         get_logger().warning(
-            f"no EEX before {first_eex}: those dates use own VWAPs (contract reconstruction enabled: {cfg.layer_arbitrage})"
+            f"no EEX before {first_eex}: those dates rely on own VWAPs; "
+            "coherence and arbitrage apply only where enabled"
         )
     days = _reference_days(cfg, raw, maps, books, start, end)
     output_keys = {(day, m.key) for day in days for m in maps if m.active and m.use == "fill"}

@@ -19,6 +19,7 @@ output_dir     = "output"
 
 
 [layers]
+coherence   = true     # Quarter without own VWAP = hour-weighted mean of its three complete months; false disables this step
 arbitrage   = false    # Opt in to reconstruct unresolved targets from own/already estimated contracts
 
 

@@ -9,6 +9,7 @@ Cascade per (day, curve identity, target tenor):
                 (plus, with history_days > 0, recent days for the remaining trust).
   eex_history   No own VWAP today, but recent days' VWAPs (history_days > 0).
   eex           EEX price, when no own VWAP of the day can be compared with EEX.
+  months_aggregate  Optional coherence: quarter without own VWAP from its three priced months.
   arbitrage     Optional: rebuild from own/already estimated contracts.
   missing       No estimate is available.
 
@@ -42,7 +43,7 @@ from vwaps.mapping import ProductMap
 from vwaps.neighbours import Anchor, estimate, log_ttm
 from vwaps.pricer import Pricer
 from vwaps.product_config import configuration_context_records, configuration_record, effective_config
-from vwaps.tenors import Key, Period, resolve_tenor
+from vwaps.tenors import Key, Period, add_months, resolve_tenor
 
 GROUPS = ("short", "month", "quarter", "long")
 # Equal delivery intervals can have both full-contract and residual labels.
@@ -566,6 +567,92 @@ class CurveFiller:
             ),
         }
 
+    def _aggregate_quarters(self, s: Series, p: DayPrep, rows: list[dict]) -> None:
+        """Prefer complete monthly delivery coverage for quarters without own VWAPs.
+
+        Only existing monthly outputs and original full-month quotes are used.
+        Run before optional arbitrage so a quarter cannot feed a missing month
+        and then cite that same month as independent evidence for its own price.
+        """
+        months = {}
+        for row in sorted(rows, key=lambda r: r["tenor"]):
+            key = (row["delivery_start"], row["delivery_end"])
+            if (
+                row["kind"] == "Month"
+                and row["source"] != "missing"
+                and math.isfinite(row["price"])
+                and row["hours"] > 0
+                and key not in p.rejected
+            ):
+                months.setdefault(key, row)
+        # Original monthly quotes may exist outside the configured target list.
+        for key, quote in p.own.items():
+            if quote.period.kind != "Month" or key in p.rejected:
+                continue
+            months.setdefault(
+                key,
+                {
+                    "tenor": ",".join(quote.tenors),
+                    "delivery_start": quote.period.start,
+                    "delivery_end": quote.period.end,
+                    "price": quote.vwap,
+                    "hours": s.hfn(*key, kind="Month"),
+                    "source": "own",
+                    "confidence": 1.0,
+                },
+            )
+        for row in rows:
+            if row["kind"] != "Quarter" or row["source"] == "own":
+                continue
+            start = row["delivery_start"]
+            boundaries = [add_months(start, i) for i in range(4)]
+            if boundaries[-1] != row["delivery_end"]:
+                continue
+            keys = list(zip(boundaries[:-1], boundaries[1:], strict=True))
+            if any(key not in months for key in keys):
+                continue
+            parts = [months[key] for key in keys]
+            hours = [part["hours"] for part in parts]
+            total = math.fsum(hours)
+            if any(h <= 0 for h in hours) or not math.isclose(total, row["hours"], rel_tol=0, abs_tol=1e-9):
+                continue
+            shares = [h / total for h in hours]
+            price = math.fsum(part["price"] * share for part, share in zip(parts, shares, strict=True))
+            reference = row["eex_settle"] if math.isfinite(row["eex_settle"]) else row["eex_proxy"]
+            detail = [
+                {
+                    "tenor": part["tenor"],
+                    "delivery_start": part["delivery_start"].isoformat(),
+                    "delivery_end": part["delivery_end"].isoformat(),
+                    "price": part["price"],
+                    "hours": part["hours"],
+                    "share": share,
+                    "source": part["source"],
+                }
+                for part, share in zip(parts, shares, strict=True)
+            ]
+            terms = " + ".join(f"{part['tenor']} {part['price']:.2f} x {part['hours']:g} h" for part in parts)
+            row.update(
+                price=price,
+                source="months_aggregate",
+                data_origin="estimated",
+                estimation_method="quarter_from_months",
+                confidence=min(part["confidence"] for part in parts),
+                anchors=",".join(part["tenor"] for part in parts),
+                adjustment=price - reference if math.isfinite(reference) else math.nan,
+                local_deviation=math.nan,
+                trust=math.nan,
+                hist_deviation=math.nan,
+                hist_share=math.nan,
+                hist_days=math.nan,
+                audit="",
+                hist_audit="",
+                aggregation_audit=json.dumps(detail, allow_nan=False, separators=(",", ":")),
+                explanation=f"Quarter from months: ({terms}) / {total:g} h = {price:.2f}",
+                missing_reason="",
+                flag=";".join(flag for flag in row["flag"].split(";") if flag and flag != "single_eex_publication"),
+            )
+
     def _fill(self, s: Series, day: date, p: DayPrep, labels: list[str] | None = None) -> list[dict]:
         cfg = self.curve_configs[s.key]
         rows, pending = [], []
@@ -622,6 +709,7 @@ class CurveFiller:
                 "explanation": "",
                 "audit": "",
                 "hist_audit": "",
+                "aggregation_audit": "",
                 "missing_reason": "",
                 "eex_proxy": proxy.price if proxy else math.nan,
                 "eex_proxy_rule": proxy.rule if proxy else "",
@@ -672,6 +760,9 @@ class CurveFiller:
                         row["flag"] = ";".join(filter(None, [row["flag"], "single_eex_publication"]))
             rows.append(row)
 
+        if cfg.layer_coherence:
+            self._aggregate_quarters(s, p, rows)
+        pending = [row for row in pending if row["source"] == "missing"]
         if pending and cfg.layer_arbitrage:  # Filled contracts plus VWAPs outside the target list.
             known = {
                 (x["delivery_start"], x["delivery_end"]): x["price"]

@@ -44,6 +44,8 @@ class Config:
     max_anchor_dev: float
     warmup_days: int
     vwap_columns: dict[str, str]
+    # Optional quarter/month coherence; keep the existing aggregation enabled by default.
+    layer_coherence: bool = True
     # Neighbour method (see ALGORITMO.md)
     tau_log: float = 0.7  # reach along the curve, in log days to delivery
     shrink_k: float = 1.0  # evidence needed before trusting nearby deviations
@@ -123,6 +125,8 @@ def validate_config(cfg: Config) -> None:
     validate_parameter_overrides(cfg.command_overrides)
     if not isinstance(cfg.layer_arbitrage, bool):
         raise ValueError("layers.arbitrage must be a boolean, not a quoted string or number")
+    if not isinstance(cfg.layer_coherence, bool):
+        raise ValueError("layers.coherence must be a boolean, not a quoted string or number")
     for name, value, choices in (
         ("run.configuration_mode", cfg.configuration_mode, ("global", "individual")),
         ("conventions.day", cfg.day_convention, ("calendar", "business")),
@@ -191,6 +195,7 @@ def load_config(path: str | Path) -> Config:
         eex_curves_dir=Path(),
         output_dir=Path(),
         layer_arbitrage=layers.get("arbitrage", False),
+        layer_coherence=layers.get("coherence", True),
         max_stale_days=eex.get("max_stale_days", 0),
         warn_stale_days=eex.get("warn_stale_days", 3),
         eex_offset_days=eex.get("offset_days", 0),

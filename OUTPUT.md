@@ -2,6 +2,27 @@
 
 > **VWAPS_auditable:** document inherited from VWAPS. The infrastructure (commands, mapping, outputs, MLflow) is the same; gap filling uses the neighbour method (`[method] tau_log`, `shrink_k`), see [ALGORITHM.md](ALGORITHM.md). Shape, `basis_mode`/ratio/auto, history, correlation, `cross` and `[eex_fallback]` do not exist here; output columns of the method are listed in ALGORITMO.md section 10.
 
+**VWAPS_auditable optional layer (`layers.coherence = true`, enabled by default):** a quarter without own VWAP is calculated from its three complete eligible
+months, weighted by delivery hours, when they cover the entire quarter for the same curve/date.
+It uses `source = months_aggregate`, `estimation_method = quarter_from_months` and
+`data_origin = estimated`. `aggregation_audit` records monthly periods, prices, hours, normalized
+shares and sources; summing price × share reproduces the quarter price. `explanation` describes the
+calculation. Enriched output exposes the trace as `curve_aggregation_audit`. With
+`layers.coherence = false`, the usual estimate is retained without this replacement. The layer is
+independent of `layers.arbitrage`, which can still reconstruct gaps if enabled. In `individual`
+mode, the mapping's `layer_coherence` column overrides the setting per product; an empty cell
+inherits the TOML setting. The flow is usual filling → optional coherence → optional arbitrage
+→ consistency report. Months may be own or estimated and must
+have positive hours; an absent/unpriced month or one excluded as an anchor prevents aggregation
+and leaves the usual result intact. Own prices stay unchanged; day/week/season/year coherence is not
+enforced. See also consistency output below.
+
+Each `aggregation_audit` item contains `tenor`, `delivery_start`, `delivery_end`, `price`, `hours`,
+`share` and `source`. `confidence` inherits the lowest of the three monthly scores, not a
+probability. `adjustment` is the final quarter price minus its EEX/proxy reference, or empty when
+no reference is available. `audit`, `hist_audit`, `local_deviation`, `trust` and numeric `hist_*`
+diagnostics are empty: the replaced neighbour calculation no longer explains the final price.
+
 Spanish version: [OUTPUT.es.md](OUTPUT.es.md). Calculation rules: [ALGORITHM.md](ALGORITHM.md). Optional final layer: [SHAPE.md](SHAPE.md).
 
 All curve keys use **reference date + product + region + unit + tenor label**. A blank region or unit is a literal identity value. Prices and absolute errors use the row's `unit`; currencies are not converted. CSV files use UTF-8 with BOM, comma separators and a header. Empty numeric/date cells mean unavailable or not applicable, not zero. Zero and negative prices are valid finite values.
@@ -99,7 +120,7 @@ These fields are written to `filled_history.csv` and daily filled files. There i
 | `delivery_end` | ISO date | Exclusive delivery end. |
 | `hours` | Number, >=0 | Delivery hours under the mapped profile, timezone and target kind; includes applicable calendar/DST rules. |
 | `price` | Finite number or empty | Engine price in `unit`; empty with `source=missing`. |
-| `source` | Text | `own`, `eex+local`, `eex+hist`, `eex+cross`, `eex+smooth`, `arbitrage`, `missing`; changed shape sources append `+shape` (including `own+shape`); see below. |
+| `source` | Text | VWAPS_auditable adds `months_aggregate` (see opening note and ALGORITHM.md). Inherited values: `own`, `eex+local`, `eex+hist`, `eex+cross`, `eex+smooth`, `arbitrage`, `missing`; changed shape sources append `+shape` (including `own+shape`); see below. |
 | `confidence` | Number, 0..1, or empty after a shape change | Heuristic diagnostic, **not a probability or calibrated accuracy measure**. Own=1, missing=0, arbitrage=0.4. EEX-based values use 0.4 for smoothed EEX or `0.5+0.4*local_weight`, reduced by 0.85 for a non-exact contract and 0.9 for an earlier settlement; rounded to three decimals. |
 | `data_origin` | Text | `original` for own, `estimated` for a calculated price (including smoothed EEX), `missing` otherwise. |
 | `estimation_method` | Text | `none` for own, `unavailable` for missing, or a calculation method below. |
@@ -173,6 +194,7 @@ settlement may happen; it does not mean the settlement was copied as a direct fa
 | `source` | Meaning |
 |---|---|
 | `own` | Own VWAP for the same delivery period, including supported tenor aliases. |
+| `months_aggregate` | VWAPS_auditable: quarter without own VWAP, calculated from its three complete eligible months by delivery hours when `layers.coherence = true`, also with `layers.arbitrage = false`. |
 | `eex+local` | EEX with a local-led adjustment; a historical/cross component can also contribute. |
 | `eex+hist` | EEX with a history-led adjustment; local evidence can also contribute. |
 | `eex+cross` | EEX with a prior-led adjustment that includes cross-curve information. |
@@ -183,12 +205,14 @@ settlement may happen; it does not mean the settlement was copied as a direct fa
 The sequence follows available information, not an intrinsic quality ranking. Historical
 basis is an adjustment relative to EEX, so it requires a usable EEX reference and permitted
 history. `arbitrage = false` does not disable `exact`/`strip`/`residual` construction of that
-EEX reference; it disables only the later reconstruction from own/already estimated contracts.
+EEX reference; it disables the general later reconstruction from own/already estimated contracts.
+The specific `months_aggregate` rule in VWAPS_auditable remains active when `layers.coherence = true`.
 For worked examples of the nine cases, see section 0.9 of [ALGORITHM.md](ALGORITHM.md).
 
 `source` is a summary category. For component detail, use `estimation_method` and the diagnostic columns. Engine methods are constructed exactly as follows:
 
 - `none`: own price; `unavailable`: engine price missing.
+- `quarter_from_months`: VWAPS_auditable's optional `layers.coherence` quarter reconstruction from three complete months, with an `aggregation_audit` breakdown.
 - `ratio_` or `additive_`, followed by the available component names in this fixed order: `local`, `history`, `cross`, joined with underscores. For example `additive_local_history` or `ratio_history_cross`. This describes available components in the calculation, not a claim that each numerical contribution is nonzero.
 - `eex_price_simple`, `eex_price_ewma`: direct period average. `eex_month_cascade_simple`, `eex_month_cascade_ewma`: anchor-month average plus simple spreads. The suffix describes price averaging, not spread averaging.
 - `contract_exact`, `contract_strip`, `contract_residual`: final contract reconstruction when `arbitrage` is enabled. `exact` uses the matching period, `strip` combines contiguous periods by delivery hours, and `residual` extracts the tail of a larger contract using the covered head. Components can be own or already estimated prices.
@@ -219,7 +243,15 @@ Auto rationale flags are emitted when an EEX-based estimate takes that branch, n
 
 ## Consistency output
 
-`consistency_history.csv` contains only available comparisons: Quarter against months, Season against quarters, Year against quarters. No row means no such comparison was produced, not proof of consistency. Shape-off prices are reported without reconciliation. Active shape applies soft aggregate penalties and adds stages; equality is not guaranteed.
+`consistency_history.csv` contains only available comparisons: Quarter against months, Season
+against quarters, Year against quarters. No row means no such comparison was produced, not proof
+of consistency. In VWAPS_auditable, `months_aggregate` quarters already match their months by
+construction; the report does not change prices and also runs with `layers.coherence = false`.
+**If the quarter and its months all have own
+VWAPs and disagree, all are preserved and the discrepancy is reported.** Trades may have occurred
+at different times: preserving every own price cannot also guarantee equality. Other relationships
+can still show differences. The shape layer described below belongs to the original method and
+does not apply to VWAPS_auditable.
 
 | Columns | Meaning |
 |---|---|

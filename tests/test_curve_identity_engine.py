@@ -71,7 +71,7 @@ def test_assigned_curve_without_available_book_retains_own_and_contract_reconstr
     assert not result.errors
     output = result.filled.set_index("tenor")
     assert list(output.loc[["M+1", "M+2", "M+3"], "source"]) == ["own"] * 3
-    assert output.loc["Q+1", "source"] == "arbitrage"
+    assert output.loc["Q+1", "source"] == "months_aggregate"
     assert output.loc["Q+1", "price"] == 100.0
 
 

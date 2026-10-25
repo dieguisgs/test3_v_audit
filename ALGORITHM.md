@@ -61,12 +61,39 @@ The output `explanation` reads:
 
 ## Sources and empty cells
 
+After neighbour filling and before optional arbitrage, the optional coherence layer
+(`layers.coherence = true`, enabled by default) replaces a quarter without own VWAP by the delivery-hour-weighted mean of its
+three complete months, when available for the same curve/date. The months can have own or estimated
+prices, must cover the full quarter and have positive hours; months excluded as anchors by filters
+are not used. Missing or ineligible components leave the usual result unchanged. With
+`layers.coherence = false`, the usual estimate is retained without this replacement. The layer
+applies independently of `layers.arbitrage`, which can still reconstruct gaps when coherence is off.
+In `individual` mode, the mapping's `layer_coherence` column overrides the setting per product;
+an empty cell inherits the TOML setting. Months, days, weeks, seasons, years and
+own quarter prices are not changed. If own quarter/month VWAPs disagree, the consistency report
+records the discrepancy, also when coherence is disabled: their trades can occur at different times, so keeping all own prices
+cannot also guarantee equality.
+Own months outside requested targets are eligible, but unrequested months are not estimated and
+offered tenors are not expanded. The flow is usual filling → optional coherence → optional arbitrage
+→ consistency report. Running coherence before arbitrage prevents circular reconstructions.
+
+`estimation_method = quarter_from_months` identifies this calculation. `aggregation_audit` is a list
+with each month's `tenor`, `delivery_start`, `delivery_end`, `price`, `hours`, `share` and `source`;
+summing `price × share`
+reproduces the quarter price. `explanation` states the calculation. Coherence is guaranteed for
+these aggregated quarters only, and is not a claim of improved prediction accuracy.
+`confidence` inherits the lowest of the three monthly scores, not a probability. `adjustment` is
+the final quarter price minus its EEX/proxy reference, or empty without a reference. `audit`,
+`hist_audit`, `local_deviation`, `trust` and numeric `hist_*` diagnostics are empty because the
+neighbour calculation no longer produces the final price.
+
 | `source` | Meaning |
 |---|---|
 | `own` | Own VWAP, as is |
 | `eex_adjusted` | EEX + λ · nearby deviation |
 | `eex_history` | No own VWAP today; recent days' VWAPs move it |
 | `eex` | No comparable own VWAP today or in the history window: EEX |
+| `months_aggregate` | Quarter without own VWAP: delivery-hour-weighted mean of its three complete eligible months when `layers.coherence = true`, independently of `layers.arbitrage` |
 | `arbitrage` | Optional (`layers.arbitrage`): rebuilt from filled contracts |
 | `eex_proxy` | EEX does not quote the contract: parent + EWMA sibling shape (spread for short, ratio for quarters/seasons, neighbour shape for months) |
 | `eex_donor` | The market has no EEX publication that day: a neighbouring market's curve gives the shape, own VWAPs the level |

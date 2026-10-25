@@ -149,12 +149,28 @@ objetivo:
 6. **Rellenar cada hueco** con la fórmula de la sección 3, usando **todas** las anclas del día del
    mismo producto. No se distingue tipo de contrato: un mes puede mover un quarter y viceversa. La
    cercanía ya decide cuánto.
-7. **Arbitraje (opcional, apagado por defecto).** Si EEX no tiene precio para un hueco y
-   `layers.arbitrage = true`, se intenta reconstruir desde contratos ya rellenados (por ejemplo un
-   quarter desde sus tres meses).
-8. **Lo que queda vacío** se marca `source = missing` con su motivo en `missing_reason`.
-9. **Chequeo de consistencia** (solo informe, no modifica precios): Cal frente a la media de sus Q, Q
-   frente a la de sus meses, etc. → `consistency_report.csv`.
+7. **Coherencia trimestral opcional (`layers.coherence = true`, activada por defecto).** Un trimestre sin VWAP propio se calcula como
+   `Σ(precio_mes × horas_mes) / Σ(horas_mes)` si sus tres meses completos tienen precio y horas
+   positivas en la misma curva/fecha, cubren exactamente el trimestre y ninguno está excluido como
+   ancla por los filtros. Los precios mensuales pueden ser propios o estimados. Si faltan componentes
+   admisibles, se conserva el resultado habitual. Con `layers.coherence = false` se conserva también
+   la estimación habitual sin aplicar esta sustitución. Es independiente de `layers.arbitrage`;
+   se publica como `source = months_aggregate` y
+   `estimation_method = quarter_from_months`, con `aggregation_audit` y `explanation`. No cambia los
+   meses, días, semanas, seasons, años ni trimestres con VWAP propio. Admite meses propios fuera de los objetivos;
+   no estima meses no solicitados ni amplía los tenors ofrecidos. Se ejecuta antes del arbitraje
+   opcional para evitar que un mes derivado del trimestre vuelva a alimentar ese mismo trimestre.
+8. **Arbitraje general (opcional, apagado por defecto).** Si EEX no tiene precio para un hueco y
+   `layers.arbitrage = true`, se intenta reconstruir desde contratos ya rellenados. Esta capa es
+   independiente de la coherencia trimestral: puede reconstruir huecos aunque `coherence = false`.
+9. **Lo que queda vacío** se marca `source = missing` con su motivo en `missing_reason`.
+10. **Chequeo de consistencia** (solo informe, no modifica precios): Cal frente a la media de sus Q, Q
+   frente a la de sus meses, etc. → `consistency_report.csv`. Se ejecuta también con `coherence = false`.
+
+**Si trimestre y meses tienen todos VWAP propio y no cuadran, se conservan todos y se informa del
+descuadre.** Pueden representar operaciones realizadas en momentos distintos; conservarlos y exigir
+igualdad a la vez no es posible. La regla anterior garantiza coherencia solo para los trimestres
+agregados y no garantiza por sí sola un menor error al estimar el VWAP que falta.
 
 ## 5. Ejemplo numérico completo
 
@@ -516,25 +532,30 @@ contrato). Columnas del método:
 | Columna | Significado |
 |---|---|
 | `price` | Precio final |
-| `source` | `own`, `eex_adjusted`, `eex_history`, `eex`, `eex_proxy`, `eex_donor`, `arbitrage` o `missing` |
+| `source` | `own`, `eex_adjusted`, `eex_history`, `eex`, `eex_proxy`, `eex_donor`, `months_aggregate`, `arbitrage` o `missing` |
+| `estimation_method` | `quarter_from_months` cuando el trimestre sin VWAP propio se calcula desde sus tres meses completos |
 | `eex_proxy`, `eex_proxy_rule`, `eex_proxy_detail` | Precio de referencia reconstruido cuando EEX no cotiza el contrato, regla y detalle (6c) |
 | `eex_reference` | Vacío = EEX del propio mercado; si no, la curva vecina usada ese día (6c) |
 | `eex_settle`, `eex_method`, `eex_asof` | Precio EEX usado, cómo se obtuvo y de qué publicación |
 | `anchors` | VWAPs que han influido, del más al menos influyente |
 | `local_deviation` | Desviación media ponderada (€/MWh) |
 | `trust` | λ, la fracción de esa desviación que se aplica |
-| `adjustment` | Precio publicado − referencia usada (EEX, proxy o curva vecina) = trust · local + hist_share · hist. Con EWMA corta (sin información propia), es la diferencia EWMA − EEX del día |
+| `adjustment` | Precio publicado − referencia usada (EEX, proxy o curva vecina). En vecinos = trust · local + hist_share · hist; con EWMA corta = EWMA − EEX del día. En `months_aggregate`, diferencia del precio trimestral final respecto a la referencia disponible, o vacío si no hay referencia |
 | `hist_deviation`, `hist_share`, `hist_days` | Desviación histórica (prudente), parte de confianza que recibe y días usados |
 | `hist_audit` | JSON con cada día pasado: fecha, desviación local de ese día y su peso |
 | `explanation` | Una línea legible con el cálculo completo |
 | `audit` | JSON con cada VWAP: precio, EEX, desviación, distancia, peso y % de influencia |
-| `confidence` | **Puntuación orientativa de 0 a 1 para ordenar o filtrar celdas, no una probabilidad de acierto.** 1 si es propio; 0.4 + 0.5·trust (+ 0.1·hist_share) si se estima; 0.2 + 0.3·trust con proxy; 0.15 + 0.3·trust con curva vecina; × 0.9 si EEX no es del día. La precisión real de cada capa está en las secciones 6c y 9b |
+| `aggregation_audit` | Lista JSON de los tres meses usados en `months_aggregate`, con `tenor`, `delivery_start`, `delivery_end`, `price`, `hours`, `share` y `source`. La suma de `price × share` reproduce el trimestre |
+| `confidence` | **Puntuación orientativa de 0 a 1 para ordenar o filtrar celdas, no una probabilidad de acierto.** En `months_aggregate`, el mínimo de las puntuaciones de los tres meses. En los demás casos: 1 si es propio; 0.4 + 0.5·trust (+ 0.1·hist_share) si se estima; 0.2 + 0.3·trust con proxy; 0.15 + 0.3·trust con curva vecina; × 0.9 si EEX no es del día. La precisión real de cada capa está en las secciones 6c y 9b |
 | `missing_reason` | Por qué está vacío (solo en celdas `missing`) |
 | `flag` | Avisos: `anchor_excluded`, `zero_delivery_hours`… |
 
-Cualquier precio se puede recalcular a mano con
+Los precios del método de vecinos se pueden recalcular a mano con
 `eex_settle + trust · local_deviation + hist_share · hist_deviation`, y cada parte con los JSON
-`audit` y `hist_audit`.
+`audit` y `hist_audit`. Los trimestres `months_aggregate` se reconstruyen con `aggregation_audit`;
+la fórmula de vecinos ya no describe su precio final. En esos trimestres, `audit` y `hist_audit`
+quedan vacíos, al igual que `local_deviation`, `trust` y los diagnósticos numéricos `hist_*`, para
+evitar atribuir el precio final al cálculo de vecinos sustituido.
 
 Además:
 - `output/enriched_history.csv` es tu fichero original intacto, con las filas rellenadas añadidas.
@@ -575,6 +596,7 @@ min_volume     = 0     # volumen mínimo para que un VWAP mueva a otros
 max_anchor_dev = 0     # si > 0, un VWAP más lejos de EEX que esta fracción no mueve a otros
 
 [layers]
+coherence = true       # trimestre sin VWAP propio desde sus tres meses; false = sin sustitución
 arbitrage = false      # reconstruir huecos sin EEX desde contratos ya rellenados
 
 [targets]
@@ -600,7 +622,7 @@ idéntico a VWAPS.
 
 **Mapeo Excel/CSV con on/off:** `mappings/products.csv` o `.xlsx`, una fila por producto con
 `use = fill` / `off`. Con `python run.py mapping --with-parameters` se añaden columnas por producto
-(`tau_log`, `shrink_k`, `history_days`, `min_volume`, `max_anchor_dev`, `layer_arbitrage`, `tenors`). Se aplican con
+(`tau_log`, `shrink_k`, `history_days`, `min_volume`, `max_anchor_dev`, `layer_coherence`, `layer_arbitrage`, `tenors`). Se aplican con
 `[run] configuration_mode = "individual"`; una celda vacía hereda el TOML.
 
 **Por ejecución:** `--tau-log`, `--shrink-k`, `--history-days`, `--eex-offset-days`, `--configuration-mode`.

@@ -1,4 +1,4 @@
-"""Contract reconstruction is opt-in; EEX reference pricing stays available."""
+"""Quarter aggregation is automatic; other own-contract reconstruction is opt-in."""
 
 from datetime import date
 from pathlib import Path
@@ -50,7 +50,7 @@ def test_repository_configuration_disables_arbitrage():
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_quarter_reconstruction_from_own_months_requires_explicit_enablement(tmp_path, enabled):
+def test_quarter_reconstruction_from_own_months_is_independent_of_arbitrage(tmp_path, enabled):
     layers = "[layers]\narbitrage = true\n" if enabled else ""
     cfg = configured(tmp_path, layers)
     curve = mapping()
@@ -65,15 +65,10 @@ def test_quarter_reconstruction_from_own_months_requires_explicit_enablement(tmp
     assert months["data_origin"].eq("original").all()
     assert months["estimation_method"].eq("none").all()
     quarter = output.loc["Q+1"]
-    if enabled:
-        assert quarter["price"] == pytest.approx(120.0)
-        assert quarter["source"] == "arbitrage"
-        assert quarter["data_origin"] == "estimated"
-        assert quarter["estimation_method"] == "contract_strip"
-    else:
-        assert pd.isna(quarter["price"])
-        assert quarter["source"] == quarter["data_origin"] == "missing"
-        assert quarter["estimation_method"] == "unavailable"
+    assert quarter["price"] == pytest.approx(120.0)
+    assert quarter["source"] == "months_aggregate"
+    assert quarter["data_origin"] == "estimated"
+    assert quarter["estimation_method"] == "quarter_from_months"
 
 
 def test_disabled_arbitrage_still_prices_eex_quarter_from_months(tmp_path):
@@ -91,10 +86,12 @@ def test_disabled_arbitrage_still_prices_eex_quarter_from_months(tmp_path):
     quarter = output.loc["Q+1"]
     assert quarter["eex_method"] == "strip"
     assert quarter["eex_settle"] == pytest.approx(100.0)
-    # The own October (+20 over EEX) moves the quarter that contains it.
-    assert quarter["source"] == "eex_adjusted"
+    # October is preserved; November and December are estimated first. The quarter
+    # is then the hour-weighted mean of the three published monthly prices.
+    assert quarter["source"] == "months_aggregate"
     assert quarter["data_origin"] == "estimated"
-    assert quarter["estimation_method"] == "eex_plus_neighbours"
-    assert quarter["anchors"] == "M+1"
-    assert quarter["price"] == pytest.approx(100.0 + quarter["trust"] * 20.0)
+    assert quarter["estimation_method"] == "quarter_from_months"
+    assert quarter["anchors"] == "M+1,M+2,M+3"
+    months = output.loc[["M+1", "M+2", "M+3"]]
+    assert quarter["price"] == pytest.approx((months.price * months.hours).sum() / months.hours.sum())
     assert 100.0 < quarter["price"] < 120.0

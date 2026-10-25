@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 MODEL_PARAMETER_FIELDS = (
     "tenors",
     "layer_arbitrage",
+    "layer_coherence",
     "min_volume",
     "max_anchor_dev",
     "tau_log",
@@ -34,7 +35,7 @@ MODEL_PARAMETER_FIELDS = (
     "history_days",
 )
 
-_BOOL_FIELDS = frozenset(("layer_arbitrage",))
+_BOOL_FIELDS = frozenset(("layer_arbitrage", "layer_coherence"))
 _INT_FIELDS = frozenset(("history_days",))
 _STRING_FIELDS: frozenset[str] = frozenset()
 _FLOAT_FIELDS = frozenset(MODEL_PARAMETER_FIELDS) - (_BOOL_FIELDS | _INT_FIELDS | _STRING_FIELDS | {"tenors"})

@@ -131,7 +131,7 @@ def test_arbitrage_respects_minimum_volume_without_any_eex(cfg, volume, eligible
     result = CurveFiller(cfg, own, [MAPPING], {MAPPING.key: None}).run(DAY, DAY)
     assert not result.errors
     rows = result.filled.set_index("tenor")
-    assert rows.loc["Q+1", "source"] == ("arbitrage" if eligible else "missing")
+    assert rows.loc["Q+1", "source"] == ("months_aggregate" if eligible else "missing")
     if eligible:
         assert rows.loc["Q+1", "price"] == pytest.approx(100.0)
     else:

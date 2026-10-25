@@ -2,6 +2,27 @@
 
 > **VWAPS_auditable:** documento heredado de VWAPS. La infraestructura (comandos, mapeo, salidas, MLflow) es la misma; el relleno usa el método de vecinos (`[method] tau_log`, `shrink_k`), ver [ALGORITMO.md](ALGORITMO.md). Aquí no existen shape, `basis_mode`/ratio/auto, historia, correlaciones, `cross` ni `[eex_fallback]`; las columnas del método están en la sección 10 de ALGORITMO.md.
 
+**Capa opcional de VWAPS_auditable (`layers.coherence = true`, activada por defecto):** un trimestre sin VWAP propio se calcula desde sus tres meses
+completos y admisibles, ponderados por horas, cuando cubren exactamente el trimestre en la misma
+curva/fecha. Se identifica con `source = months_aggregate`, `estimation_method = quarter_from_months`
+y `data_origin = estimated`. `aggregation_audit` contiene los periodos, precios, horas, fracciones
+del total y procedencias mensuales; la suma de precio × fracción reproduce el trimestre.
+`explanation` describe el cálculo. El enriquecido expone la traza como `curve_aggregation_audit`.
+Con `layers.coherence = false` se conserva la estimación habitual sin esta sustitución. La capa
+es independiente de `layers.arbitrage`, que puede seguir reconstruyendo huecos si está activada.
+En modo `individual`, `layer_coherence` en el mapeo permite cambiar el ajuste por producto;
+una celda vacía hereda el TOML. El orden es relleno habitual → coherencia opcional → arbitraje
+opcional → informe de consistencia.
+Los meses pueden ser propios o estimados, con horas positivas; un mes ausente, sin precio o excluido
+como ancla impide la agregación y conserva el resultado habitual. No cambia precios propios ni
+impone coherencia a días, semanas, seasons o años. Véase también la sección de consistencia.
+
+Cada elemento de `aggregation_audit` incluye `tenor`, `delivery_start`, `delivery_end`, `price`,
+`hours`, `share` y `source`. `confidence` hereda la puntuación más baja de los tres meses, no una
+probabilidad. `adjustment` es precio trimestral final menos referencia EEX/proxy, o vacío si no hay
+referencia. `audit`, `hist_audit`, `local_deviation`, `trust` y los diagnósticos numéricos `hist_*`
+quedan vacíos: el cálculo de vecinos sustituido ya no explica el precio final.
+
 Versión inglesa: [OUTPUT.md](OUTPUT.md). Reglas de cálculo: [ALGORITMO.md](ALGORITMO.md). Capa final opcional: [SHAPE.es.md](SHAPE.es.md).
 
 Todas las claves de curva utilizan **fecha de referencia + product + region + unit + etiqueta de tenor**. Una región o unidad vacía es un valor literal de identidad. Los precios y errores absolutos usan la `unit` de su fila; no se convierten divisas. Los CSV usan UTF-8 con BOM, separador de coma y cabecera. Una celda numérica o de fecha vacía significa no disponible o no aplicable, nunca cero. Los precios cero y negativos son valores finitos válidos.
@@ -99,7 +120,7 @@ Estas columnas aparecen en `filled_history.csv` y los filled diarios. Hay una fi
 | `delivery_end` | Fecha ISO | Fin exclusivo de entrega. |
 | `hours` | Número, >=0 | Horas según perfil, zona horaria y tipo de objetivo; incorpora las reglas aplicables de calendario/cambio horario. |
 | `price` | Número finito o vacío | Precio del motor en `unit`; vacío cuando `source=missing`. |
-| `source` | Texto | `own`, `eex+local`, `eex+hist`, `eex+cross`, `eex+smooth`, `arbitrage`, `missing`; los source cambiados por shape reciben `+shape`, incluido `own+shape`; véase más abajo. |
+| `source` | Texto | En VWAPS_auditable incluye `months_aggregate` (véase el aviso inicial y ALGORITMO.md). Valores heredados: `own`, `eex+local`, `eex+hist`, `eex+cross`, `eex+smooth`, `arbitrage`, `missing`; los source cambiados por shape reciben `+shape`, incluido `own+shape`; véase más abajo. |
 | `confidence` | Número, 0..1, o vacío tras cambio shape | Diagnóstico heurístico, **no probabilidad ni precisión calibrada**. Own=1, missing=0, arbitrage=0.4. Con EEX usa 0.4 para el respaldo EEX suavizado o `0.5+0.4*local_weight`; multiplica por 0.85 si el contrato no es exacto y por 0.9 si el settlement es anterior; redondea a tres decimales. |
 | `data_origin` | Texto | `original` para own, `estimated` para precio calculado, incluido el respaldo EEX suavizado, y `missing` en otro caso. |
 | `estimation_method` | Texto | `none` para own, `unavailable` para missing o método de cálculo descrito abajo. |
@@ -173,6 +194,7 @@ settlement puede ocurrir; no significa que se haya copiado como respaldo directo
 | `source` | Significado |
 |---|---|
 | `own` | VWAP propio del mismo periodo de entrega, incluidos alias de tenor admitidos. |
+| `months_aggregate` | VWAPS_auditable: trimestre sin VWAP propio, calculado desde sus tres meses completos admisibles por horas cuando `layers.coherence = true`, también con `layers.arbitrage = false`. |
 | `eex+local` | EEX con ajuste donde predomina la parte local; también puede contribuir histórico/cross. |
 | `eex+hist` | EEX con ajuste donde predomina el histórico; también puede contribuir evidencia local. |
 | `eex+cross` | EEX con ajuste donde predomina el previo e interviene información entre curvas. |
@@ -183,12 +205,14 @@ settlement puede ocurrir; no significa que se haya copiado como respaldo directo
 El orden depende de la información disponible, no de una clasificación intrínseca de calidad.
 El basis histórico es un ajuste respecto a EEX: requiere una referencia EEX utilizable y una
 historia permitida. `arbitrage = false` no desactiva la construcción de esa referencia mediante
-`exact`/`strip`/`residual`; solo desactiva la reconstrucción posterior con contratos propios/estimados.
+`exact`/`strip`/`residual`; desactiva la reconstrucción general posterior con contratos
+propios/estimados. En VWAPS_auditable, la regla específica `months_aggregate` sigue activa cuando `layers.coherence = true`.
 Los nueve casos se explican con ejemplos en la sección 0.9 de [ALGORITMO.md](ALGORITMO.md).
 
 `source` resume la categoría. Para conocer componentes deben consultarse `estimation_method` y los diagnósticos. Los métodos del motor se construyen exactamente así:
 
 - `none`: precio propio; `unavailable`: precio del motor ausente.
+- `quarter_from_months`: capa opcional `layers.coherence` de VWAPS_auditable; reconstrucción trimestral desde los tres meses completos mediante `aggregation_audit`.
 - `ratio_` o `additive_`, seguido de los componentes disponibles en este orden fijo: `local`, `history`, `cross`, separados por guiones bajos. Ejemplos: `additive_local_history` o `ratio_history_cross`. Describe componentes disponibles en el cálculo, no asegura que cada aportación numérica sea distinta de cero.
 - `eex_price_simple`, `eex_price_ewma`: promedio directo del periodo. `eex_month_cascade_simple`, `eex_month_cascade_ewma`: media del mes ancla más spreads simples. El sufijo indica la media de precios, no la de spreads.
 - `contract_exact`, `contract_strip`, `contract_residual`: reconstrucción final cuando `arbitrage` está activado. `exact` usa el periodo coincidente; `strip` combina periodos contiguos ponderados por horas; `residual` obtiene la cola de un contrato mayor usando su tramo inicial cubierto. Sus componentes pueden ser precios propios o ya estimados.
@@ -219,7 +243,15 @@ Los flags de motivo auto se emiten al calcular una estimación basada en EEX, no
 
 ## Consistencia
 
-`consistency_history.csv` solo contiene comparaciones disponibles: Quarter frente a meses, Season frente a trimestres y Year frente a trimestres. La ausencia de fila significa que no se produjo esa comparación, no prueba consistencia. Con shape off se informan diferencias sin reconciliar precios. Shape activa añade etapas y penalizaciones suaves; no garantiza igualdad.
+`consistency_history.csv` solo contiene comparaciones disponibles: Quarter frente a meses, Season
+frente a trimestres y Year frente a trimestres. La ausencia de fila significa que no se produjo esa
+comparación, no prueba consistencia. En VWAPS_auditable, los trimestres `months_aggregate` ya
+coinciden con sus meses por construcción; el informe no modifica precios y funciona también con
+`layers.coherence = false`. **Si el trimestre y sus
+meses tienen todos VWAP propio y no cuadran, se conservan todos y se informa del descuadre.** Las
+operaciones pueden haberse realizado en momentos distintos: conservar todos esos precios y exigir
+igualdad simultáneamente no es posible. Las demás relaciones pueden seguir mostrando diferencias.
+La capa shape descrita más abajo pertenece al método original y no se aplica en VWAPS_auditable.
 
 | Columnas | Significado |
 |---|---|
